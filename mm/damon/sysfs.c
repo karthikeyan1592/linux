@@ -2215,6 +2215,7 @@ static struct damon_ctx *damon_sysfs_build_ctx(
 	return ctx;
 }
 
+/* Tracks when the next periodic re-commit via repeat_call_fn() is due. */
 static unsigned long damon_sysfs_next_update_jiffies;
 
 static int damon_sysfs_repeat_call_fn(void *data)

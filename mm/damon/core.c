@@ -1047,6 +1047,7 @@ static bool damon_valid_intervals_goal(struct damon_attrs *attrs)
  */
 int damon_set_attrs(struct damon_ctx *ctx, struct damon_attrs *attrs)
 {
+	/* local copy used for aggregation window calculations below */
 	unsigned long sample_interval = attrs->sample_interval ?
 		attrs->sample_interval : 1;
 	struct damos *s;
@@ -3273,7 +3274,10 @@ static void damon_verify_merge_two_regions(
 #endif
 
 /*
- * Merge two adjacent regions into one region
+ * Merge two adjacent regions into one region.
+ *
+ * The merged region's nr_accesses, age, and probe_hits are each
+ * recomputed as a size-weighted average of the two input regions.
  */
 static void damon_merge_two_regions(struct damon_target *t,
 		struct damon_region *l, struct damon_region *r)
