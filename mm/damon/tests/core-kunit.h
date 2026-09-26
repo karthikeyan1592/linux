@@ -216,6 +216,50 @@ static void damon_test_merge_two(struct kunit *test)
 	damon_free_target(t);
 }
 
+/*
+ * Finding 4 candidate: damon_merge_two_regions() computes
+ *   l->nr_accesses = (l->nr_accesses * sz_l + r->nr_accesses * sz_r) /
+ *                     (sz_l + sz_r);
+ * nr_accesses (unsigned int) is promoted to unsigned long before the
+ * multiply, so this is 64-bit arithmetic, not 32-bit -- but 64-bit still
+ * overflows given large enough region sizes. Two adjacent 2^62-byte
+ * regions (nr_accesses 1000 and 2000) should merge to the plain
+ * size-weighted average, 1500. Instead each term wraps to exactly 0
+ * mod 2^64, and the merged region silently gets nr_accesses = 0.
+ */
+static void damon_test_merge_two_regions_overflow(struct kunit *test)
+{
+	struct damon_target *t;
+	struct damon_region *r, *r2;
+	unsigned long half = 1UL << 62;
+
+	t = damon_new_target();
+	if (!t)
+		kunit_skip(test, "target alloc fail");
+	r = damon_new_region(0, half);
+	if (!r) {
+		damon_free_target(t);
+		kunit_skip(test, "region alloc fail");
+	}
+	r->nr_accesses = 1000;
+	r->age = 0;
+	damon_add_region(r, t);
+	r2 = damon_new_region(half, half * 2);
+	if (!r2) {
+		damon_free_target(t);
+		kunit_skip(test, "second region alloc fail");
+	}
+	r2->nr_accesses = 2000;
+	r2->age = 0;
+	damon_add_region(r2, t);
+
+	damon_merge_two_regions(t, r, r2);
+	/* Correct size-weighted average of equal-size regions: 1500. */
+	KUNIT_EXPECT_EQ(test, r->nr_accesses, 1500u);
+
+	damon_free_target(t);
+}
+
 static struct damon_region *__nth_region_of(struct damon_target *t, int idx)
 {
 	struct damon_region *r;
@@ -1651,6 +1695,7 @@ static struct kunit_case damon_test_cases[] = {
 	KUNIT_CASE(damon_test_aggregate),
 	KUNIT_CASE(damon_test_split_at),
 	KUNIT_CASE(damon_test_merge_two),
+	KUNIT_CASE(damon_test_merge_two_regions_overflow),
 	KUNIT_CASE(damon_test_merge_regions_of),
 	KUNIT_CASE(damon_test_split_regions_of),
 	KUNIT_CASE(damon_test_split_above_half_progresses),

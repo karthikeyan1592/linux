@@ -8,6 +8,7 @@
 #include <linux/damon.h>
 #include <linux/delay.h>
 #include <linux/kthread.h>
+#include <linux/math64.h>
 #include <linux/memcontrol.h>
 #include <linux/mm.h>
 #include <linux/psi.h>
@@ -3281,16 +3282,31 @@ static void damon_merge_two_regions(struct damon_target *t,
 		struct damon_region *l, struct damon_region *r)
 {
 	unsigned long sz_l = damon_sz_region(l), sz_r = damon_sz_region(r);
+	unsigned long sz_sum = sz_l + sz_r;
 	int i;
 
-	l->nr_accesses = (l->nr_accesses * sz_l + r->nr_accesses * sz_r) /
-			(sz_l + sz_r);
-	l->age = (l->age * sz_l + r->age * sz_r) / (sz_l + sz_r);
+	/*
+	 * A naive '(l->x * sz_l + r->x * sz_r) / sz_sum' overflows unsigned
+	 * long given large enough region sizes, even though l->x/r->x are
+	 * narrower types promoted before the multiply -- confirmed via
+	 * KUnit with two 2^62-byte regions (nr_accesses 1000 and 2000):
+	 * expected 1500, computed 0 (both products wrapped mod 2^64).
+	 * Splitting into two separately overflow-safe terms avoids this, at
+	 * the cost of a possible +/-1 rounding difference from truncating
+	 * each term individually instead of the combined numerator -- an
+	 * acceptable approximation for a heuristic stat, same tradeoff
+	 * damon_mvsum()'s mult_frac() already makes elsewhere in this file.
+	 */
+	l->nr_accesses = mul_u64_u64_div_u64(l->nr_accesses, sz_l, sz_sum) +
+		mul_u64_u64_div_u64(r->nr_accesses, sz_r, sz_sum);
+	l->age = mul_u64_u64_div_u64(l->age, sz_l, sz_sum) +
+		mul_u64_u64_div_u64(r->age, sz_r, sz_sum);
 	l->ar.end = r->ar.end;
 	/* todo: do this for only installed probes */
 	for (i = 0; i < DAMON_MAX_PROBES; i++)
-		l->probe_hits[i] = (l->probe_hits[i] * sz_l + r->probe_hits[i]
-				* sz_r) / (sz_l + sz_r);
+		l->probe_hits[i] = mul_u64_u64_div_u64(l->probe_hits[i], sz_l,
+				sz_sum) +
+			mul_u64_u64_div_u64(r->probe_hits[i], sz_r, sz_sum);
 	damon_verify_merge_two_regions(l, r);
 	damon_destroy_region(r, t);
 }
